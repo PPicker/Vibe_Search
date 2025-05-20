@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  database:
+    image: pgvector/pgvector:0.8.0-pg15
+    container_name: prototype_postgres
+    restart: always
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      APP_USER: ${APP_USER}
+      APP_PASSWORD: ${APP_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - ./database/${DB_PATH}:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    networks:
+      - prototype_network
+
+  # 백엔드 서비스
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: prototype_fastapi
+    restart: always
+    # 백엔드 포트를 외부로 노출 (Nginx Proxy Manager가 접근할 수 있도록)
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    env_file:
+      - .env
+    depends_on:
+      - database
+    networks:
+      - prototype_network
+
+  # 프론트엔드 서비스
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: prototype_frontend
+    restart: always
+    # 프론트엔드 포트를 외부로 노출 (Nginx Proxy Manager가 접근할 수 있도록)
+    ports:
+      - "3000:3000"
+    depends_on:
+      - database
+      - backend
+    networks:
+      - prototype_network
+
+networks:
+  prototype_network:
+    driver: bridge
