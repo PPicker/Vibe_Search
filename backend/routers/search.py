@@ -1,10 +1,9 @@
-import asyncio
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List
 from embedder import Embedder
 from services.search_service import SearchService
 from models import SearchRequest, ProductResponse
-from query_translator import parse_fashion_query,query_categorizer
+
 # 접두사에서 마지막 슬래시 제거
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -26,22 +25,17 @@ def search_products(
     search_service: SearchService = Depends(get_search_service)
 ):
     q = req.query.strip()
-    
     if not q:
         raise HTTPException(status_code=400, detail="검색어를 입력해주세요")
-
-    query_json = parse_fashion_query(q)
-    category = query_categorizer(q)
-
-    # query_json, category = await asyncio.gather(
-    #     parse_fashion_query(q),
-    #     query_categorizer(q)
-    # )
- 
+    
+    # 여기서 필요하다면 추가 처리 가능
+    # - translate 함수로 영어 번역
+    # - categorize 함수로 카테고리 분류
+    
     # 쿼리 임베딩 생성
-    q_emb = embedder.embed(query_json) 
+    q_emb = embedder.embed(q)
     
     # 서비스 계층을 통해 상품 검색
-    results = search_service.search_products_by_embedding(q_emb,query_json,category, req.top_k)
+    results = search_service.search_products_by_embedding(q_emb, req.top_k)
     
     return results
