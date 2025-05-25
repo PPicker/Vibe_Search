@@ -1,11 +1,11 @@
 import os
 import psycopg2
 import numpy as np
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple,Any
 from pgvector.psycopg2 import register_vector
 from aws import get_s3_client
 from models import ProductSearchResult, ProductDetail
-
+from psycopg2.extras import RealDictCursor
 
 
 # 상수
@@ -61,6 +61,166 @@ class DatabaseManager:
         if self._conn:
             self._conn.close()
             self._conn = None
+
+
+
+def search_products_by_hybrid(q_emb: np.ndarray, query_json: Dict[str, Any], category: str, k: int = TOP_K) -> List[ProductSearchResult]:
+    """
+    카테고리 백오프와 벡터 유사도를 결합한 하이브리드 검색
+    
+    Args:
+        q_emb: 쿼리 임베딩 벡터
+        query_json: 구조화된 패션 쿼리 정보
+        category: 카테고리 (query_categorizer 결과)
+        k: 반환할 상품 수
+    
+    Returns:
+        List[ProductSearchResult]: 검색된 상품 목록 (presigned URL 포함)
+    """
+    db_manager = DatabaseManager()
+    conn = db_manager.conn
+    s3 = db_manager.s3
+    bucket = db_manager.bucket
+
+    # 1. 쿼리 정보 추출 및 전처리
+    genre = query_json.get("장르", None)
+
+    # 장르를 배열로 변환
+    genre_list = None
+    if genre:
+        if isinstance(genre, str):
+            genre_list = [g.strip() for g in genre.split(",")]
+        else:
+            genre_list = genre
+
+    print(f"🔍 검색 시작: category={category}, genre={genre_list}")
+
+    # with conn.cursor() as cur:
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        # 2. 카테고리 백오프 검색 실행
+        results = search_with_category_backoff_and_filters(
+            cur=cur,
+            category=category,
+            genre_list=genre_list,
+            q_emb=q_emb,
+            k=k
+        )
+
+    # 3. presigned URL 생성
+    final_results = []
+    for r in results:
+        product = ProductSearchResult(**r)
+        key = product.thumbnail_key
+        if key:
+            try:
+                product.image_url = s3.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": bucket, "Key": key},
+                    ExpiresIn=3600,
+                )
+            except Exception as e:
+                print(f"⚠️ presigned URL 생성 실패: {key}, {e}")
+                product.image_url = None
+        final_results.append(product)
+
+    print(f"✅ 최종 반환: {len(final_results)}개 상품")
+    return final_results
+
+
+def search_with_category_backoff_and_filters(cur, category: str, genre_list: list, 
+                                           q_emb: np.ndarray, k: int):
+    """
+    카테고리 백오프와 모든 필터를 적용한 검색
+    """
+    # 1. 카테고리 경로와 depth 가져오기
+    if category != "None":
+        path_text, depth = get_category(cur, category)
+    
+    else : 
+        print(f"⚠️ 카테고리 '{category}'를 찾을 수 없음. 전체 검색으로 대체")
+        return search_without_category_filter(cur, genre_list, q_emb, k)
+    
+    results = []
+    parts = path_text.split(".")
+
+    print(f"🎯 카테고리 '{category}' 검색: path={path_text}, depth={depth}")
+    
+    # 2. 해당 카테고리와 그 하위 모든 항목을 한 번에 검색
+    where_conditions = ["p.category_path <@ %s::ltree"]  # 해당 경로 + 하위 모두
+    params = [path_text]
+    if genre_list:
+        where_conditions.append("p.genre && %s")
+        params.append(genre_list)
+    params.extend([q_emb, k])
+    # 4. SQL 쿼리 실행
+    sql = f"""
+        SELECT  p.id, p.name, p.original_price AS price,
+                p.url AS link, p.brand, p.thumbnail_key,
+                p.category_path
+        FROM    products AS p
+        WHERE   {' AND '.join(where_conditions)}
+        ORDER BY p.embedding <#> %s                     -- 벡터 유사도 정렬
+        LIMIT   %s
+    """
+
+    cur.execute(sql, params)
+    results.extend(cur.fetchall()) # 바로 List[Dict] 형태
+            
+    return results
+
+        
+
+def search_without_category_filter(cur, genre_list: list, q_emb: np.ndarray, k: int):
+    """
+    카테고리 필터 없이 다른 필터들과 벡터 유사도로만 검색
+    """
+    where_conditions = []
+    params = []
+    
+    # 장르 필터
+    if genre_list:
+        where_conditions.append("p.genre && %s")
+        params.append(genre_list)
+    
+    # WHERE 절 구성
+    where_clause = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
+    
+    # 임베딩 벡터와 k 추가
+    params.extend([q_emb, k])
+    
+    sql = f"""
+        SELECT  p.id, p.name, p.original_price AS price,
+                p.url AS link, p.brand, p.thumbnail_key,
+                p.category_path
+        FROM    products AS p
+        {where_clause}
+        ORDER BY p.embedding <#> %s              -- 벡터 유사도 정렬
+        LIMIT   %s
+    """
+    
+    cur.execute(sql, params)
+    
+    cur.execute(sql, params)
+    results = cur.fetchall()  # 바로 List[Dict] 형태
+
+    return results[:k]
+
+
+def get_category(cur, slug: str):
+    """
+    slug 로 category 레코드 찾기.
+    Return (path_text, depth_int)  depth = 1(root)|2(mid)|3(leaf)
+    """
+    cur.execute(
+        "SELECT path::text AS path, nlevel(path) AS depth "
+        "FROM   category WHERE name = %s",
+        (slug,)
+    )
+    rec = cur.fetchone()
+    if not rec:
+        raise ValueError(f"category '{slug}' not found in DB")
+    print(rec)
+    return rec["path"], rec["depth"]
 
 # 벡터 검색 함수
 def search_products_by_embedding(q_emb: np.ndarray, k: int = TOP_K) -> List[ProductSearchResult]:
