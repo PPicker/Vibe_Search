@@ -1,11 +1,12 @@
-
 import base64
 import os
 import json
 from google import genai
 from google.genai import types
+import asyncio
 
-def parse_fashion_query(text_query: str) -> dict:
+
+async def parse_fashion_query(text_query: str) -> dict:
     """
     패션 텍스트 쿼리를 구조화된 JSON 형태로 변환하는 함수
     
@@ -175,9 +176,9 @@ I've refined my approach to attribute assignments. With \"미니멀한 디자인
 # pip install google-genai
 
 
-def query_categorizer(text_query: str):
+async def query_categorizer(text_query: str):
     client = genai.Client(
-        api_key=os.environ.get("GEMINI_API_KEY10"),
+        api_key=os.environ.get("GEMINI_API_KEY"),
     )
 
     model = "gemini-2.5-flash-preview-05-20"
@@ -379,23 +380,3 @@ If the user's query does not provide enough information to determine a category,
     return response_text
 
 
-
-
-# 사용 예시
-if __name__ == "__main__":
-    from dotenv import load_dotenv
-    
-    async def main():
-        load_dotenv()
-        q = "도쿄의 빈티지 숍에서 찾을 것 같은 워크웨어 자켓"
-        
-        # 두 함수를 병렬로 실행
-        query_json, category = await asyncio.gather(
-            parse_fashion_query(q),
-            query_categorizer(q)
-        )
-        
-        print("Query JSON:", query_json)
-        print("Category:", category)
-    
-    asyncio.run(main())
