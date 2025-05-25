@@ -4,6 +4,8 @@ import json
 from google import genai
 from google.genai import types
 import asyncio
+
+
 async def parse_fashion_query(text_query: str) -> dict:
     """
     패션 텍스트 쿼리를 구조화된 JSON 형태로 변환하는 함수
@@ -19,7 +21,7 @@ async def parse_fashion_query(text_query: str) -> dict:
     """
     try:
         client = genai.Client(
-            api_key=os.environ.get("GEMINI_API_KEY"),
+            api_key=os.environ.get("GEMINI_API_KEY11"),
         )
 
         model = "gemini-2.5-flash-preview-05-20"
@@ -376,3 +378,5 @@ If the user's query does not provide enough information to determine a category,
         ):
             response_text += chunk.text
     return response_text
+
+
