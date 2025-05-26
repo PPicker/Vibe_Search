@@ -150,7 +150,8 @@ I've refined my approach to attribute assignments. With \"미니멀한 디자인
             contents=contents,
             config=generate_content_config,
         ):
-            response_text += chunk.text
+            if chunk.text is not None:
+                response_text += chunk.text
 
         # JSON 부분만 추출
         json_start = response_text.find('```json')
@@ -376,7 +377,8 @@ If the user's query does not provide enough information to determine a category,
             contents=contents,
             config=generate_content_config,
         ):
-            response_text += chunk.text
+            if chunk.text is not None:
+                response_text += chunk.text
     return response_text
 
 
